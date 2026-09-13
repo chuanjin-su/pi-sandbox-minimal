@@ -44,5 +44,11 @@
 		"tsx": "^4.23.1",
 		"typescript": "^5"
 	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/chuanjin-su/pi-sandbox-minimal.git"
+	},
+	"homepage": "https://github.com/chuanjin-su/pi-sandbox-minimal#readme",
+	"bugs": "https://github.com/chuanjin-su/pi-sandbox-minimal/issues",
 	"license": "MIT"
 }

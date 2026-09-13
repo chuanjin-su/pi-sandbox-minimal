@@ -1,6 +1,11 @@
 # pi-sandbox-minimal
 
+[![npm](https://img.shields.io/npm/v/pi-sandbox-minimal)](https://www.npmjs.com/package/pi-sandbox-minimal)
+[![license](https://img.shields.io/npm/l/pi-sandbox-minimal)](./LICENSE)
+
 Filesystem sandboxing for [pi](https://pi.dev/) with interactive permission prompts.
+
+Source: [github.com/chuanjin-su/pi-sandbox-minimal](https://github.com/chuanjin-su/pi-sandbox-minimal)
 
 This is a **filesystem-only** sandbox: network access is intentionally unrestricted.
 It sandboxes pi like this:
@@ -35,12 +40,21 @@ on macOS) and make sure pi's launcher environment includes its directory on `PAT
 ## Install
 
 ```bash
-# development: run pi with this directory as an extension
-pi -e /path/to/pi-sandbox-minimal
-
-# or install as a package
-pi install /path/to/pi-sandbox-minimal
+pi install npm:pi-sandbox-minimal
 ```
+
+Then start pi as usual — the sandbox activates on session start when `enabled: true`.
+
+## Development
+
+```bash
+git clone https://github.com/chuanjin-su/pi-sandbox-minimal.git
+cd pi-sandbox-minimal
+npm install
+pi -e .
+```
+
+Run pi with this directory as an extension (`pi -e .`) to test local changes.
 
 ## Usage
 
