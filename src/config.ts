@@ -8,11 +8,16 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
  * Extension configuration. Filesystem-only sandboxing: the network section of
  * the runtime config is intentionally left without allowedDomains so the
  * runtime applies no network restrictions to sandboxed bash commands.
- * Non-network runtime options (allowBrowserProcess, allowPty, credentials,
- * ignoreViolations, ...) are passed through when configured.
+ * Browser-process permissions are intentionally unsupported; browser automation
+ * should run through a separately configured MCP server.
  */
-export type SandboxConfig = Omit<SandboxRuntimeConfig, "network" | "filesystem"> & {
+export type SandboxConfig = Omit<
+	SandboxRuntimeConfig,
+	"network" | "filesystem" | "allowBrowserProcess"
+> & {
 	enabled?: boolean;
+	/** Add dynamically discovered system temp directories to read/write allowances. */
+	allowSystemTemp?: boolean;
 	sandboxUserShell?: boolean;
 	permissionPromptTimeoutSeconds?: number;
 	filesystem?: Partial<SandboxRuntimeConfig["filesystem"]>;
@@ -24,6 +29,7 @@ export const DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS = 10 * 60;
 
 export const DEFAULT_CONFIG: SandboxConfig = {
 	enabled: true,
+	allowSystemTemp: false,
 	sandboxUserShell: true,
 	permissionPromptTimeoutSeconds: DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
 	filesystem: {

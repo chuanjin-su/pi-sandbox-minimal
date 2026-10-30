@@ -8,6 +8,7 @@ import {
 } from "./config.ts";
 import { matchesPattern } from "./policy.ts";
 import type { SessionAllowances } from "./sandbox-runtime.ts";
+import { getSystemTempPaths } from "./system-temp.ts";
 
 export type PermissionChoice = "abort" | "session" | "project" | "global";
 
@@ -350,6 +351,7 @@ export function formatSandboxConfiguration(
 		`  OS sandbox active:      ${enabled && initialized ? "yes" : "no"}`,
 		`  Platform:               ${platform}${supported ? "" : " (sandboxing unsupported)"}`,
 		`  ! command sandboxing:   ${config.sandboxUserShell === false ? "off" : "on"}`,
+		`  System temp access:     ${config.allowSystemTemp === true ? "read/write" : "off"}`,
 		`  Prompt timeout:         ${config.permissionPromptTimeoutSeconds ?? DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS}s`,
 		"",
 		"Configuration",
@@ -361,6 +363,9 @@ export function formatSandboxConfiguration(
 		`  Allow Read:  ${config.filesystem?.allowRead?.join(", ") || "(none)"}`,
 		`  Allow Write: ${config.filesystem?.allowWrite?.join(", ") || "(none)"}`,
 		`  Deny Write:  ${config.filesystem?.denyWrite?.join(", ") || "(none)"}`,
+		...(config.allowSystemTemp === true
+			? [`  System temp read/write: ${getSystemTempPaths().join(", ")}`]
+			: []),
 		...(allowances.readPaths.length ? [`  Session read:  ${allowances.readPaths.join(", ")}`] : []),
 		...(allowances.writePaths.length
 			? [`  Session write: ${allowances.writePaths.join(", ")}`]

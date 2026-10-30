@@ -40,6 +40,12 @@ function tempProject(): string {
 }
 
 describe("mergeConfigLayers", () => {
+	it("system temp access defaults off and supports global/project overrides", () => {
+		strictEqual(mergeConfigLayers(DEFAULT_CONFIG, {}, {}).allowSystemTemp, false);
+		strictEqual(mergeConfigLayers(DEFAULT_CONFIG, { allowSystemTemp: true }, {}).allowSystemTemp, true);
+		strictEqual(mergeConfigLayers(DEFAULT_CONFIG, { allowSystemTemp: true },
+			{ allowSystemTemp: false }).allowSystemTemp, false);
+	});
 	it("scalar settings: project takes precedence over global", () => {
 		const merged = mergeConfigLayers(DEFAULT_CONFIG, { sandboxUserShell: false }, { sandboxUserShell: true });
 		strictEqual(merged.sandboxUserShell, true);

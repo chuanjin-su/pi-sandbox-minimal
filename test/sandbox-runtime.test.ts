@@ -2,6 +2,8 @@ import { deepStrictEqual, ok, strictEqual } from "node:assert";
 import { describe, it } from "node:test";
 
 import { DEFAULT_CONFIG, type SandboxConfig } from "../src/config.ts";
+import { decideWritePolicy, matchesPattern } from "../src/policy.ts";
+import { getSystemTempPaths } from "../src/system-temp.ts";
 import {
 	buildRuntimeConfig,
 	extractBlockedWritePath,
@@ -10,6 +12,29 @@ import {
 } from "../src/sandbox-runtime.ts";
 
 describe("resolveAllowances", () => {
+	it("does not add temp allowances unless explicitly enabled", () => {
+		for (const allowSystemTemp of [undefined, false, "true" as unknown as boolean]) {
+			deepStrictEqual(resolveAllowances({ allowSystemTemp, filesystem: { allowWrite: [] } }), {
+				readPaths: [], writePaths: [],
+			});
+		}
+	});
+
+	it("adds system temp to both tool allowances without mutating configured arrays", () => {
+		const config: SandboxConfig = {
+			allowSystemTemp: true,
+			filesystem: { allowRead: [], allowWrite: [] },
+		};
+		const effective = resolveAllowances(config);
+		deepStrictEqual(effective.writePaths, getSystemTempPaths());
+		deepStrictEqual(effective.readPaths, effective.writePaths);
+		for (const dir of getSystemTempPaths()) {
+			ok(matchesPattern(`${dir}/browser/socket`, effective.readPaths));
+			strictEqual(decideWritePolicy(`${dir}/browser/socket`, effective.writePaths, []), "allow");
+		}
+		deepStrictEqual(config.filesystem?.allowWrite, []);
+		deepStrictEqual(config.filesystem?.allowRead, []);
+	});
 	it("combines config paths with session allowances", () => {
 		const config: SandboxConfig = {
 			...DEFAULT_CONFIG,
@@ -27,6 +52,36 @@ describe("resolveAllowances", () => {
 });
 
 describe("buildRuntimeConfig", () => {
+	it("ignores the removed browser-process option without affecting system-temp access", () => {
+		const legacyConfig: SandboxConfig = {
+			// @ts-expect-error Old JSON may contain this, but it is no longer a supported option.
+			allowBrowserProcess: true,
+			allowSystemTemp: true,
+		};
+		const runtime = buildRuntimeConfig(legacyConfig);
+		strictEqual("allowBrowserProcess" in runtime, false);
+		deepStrictEqual(runtime.filesystem!.allowWrite, getSystemTempPaths());
+	});
+
+	it("includes system temp in runtime read/write rules and preserves denyWrite precedence", () => {
+		const denied = `${getSystemTempPaths()[0]}/private-file`;
+		const config: SandboxConfig = {
+			allowSystemTemp: true,
+			filesystem: { allowWrite: [], denyWrite: [denied] },
+		};
+		const runtime = buildRuntimeConfig(config);
+		for (const dir of getSystemTempPaths()) {
+			ok(runtime.filesystem!.allowWrite.includes(dir));
+			ok(runtime.filesystem!.allowRead!.includes(dir));
+		}
+		strictEqual(decideWritePolicy(denied, runtime.filesystem!.allowWrite,
+			runtime.filesystem!.denyWrite), "deny");
+	});
+
+	it("uses the requested platform for temp discovery", () => {
+		const runtime = buildRuntimeConfig({ allowSystemTemp: true }, undefined, "linux");
+		deepStrictEqual(runtime.filesystem!.allowWrite, getSystemTempPaths({ platform: "linux" }));
+	});
 	it("omits network.allowedDomains so the runtime applies no network restriction", () => {
 		const runtime = buildRuntimeConfig(DEFAULT_CONFIG, undefined, "darwin");
 		// The runtime treats `network.allowedDomains === undefined` as

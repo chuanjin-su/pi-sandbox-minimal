@@ -67,7 +67,7 @@ pi --no-sandbox   disable sandboxing for the session
 
 - **Show status** — whether the sandbox is enabled for this session, whether the OS
   sandbox is active, platform, `!` command sandboxing, prompt timeout, config file
-  locations, and all configured filesystem paths (including session-only allowances).
+  locations, and configured, session-only, and dynamically discovered temp paths.
 - **Enable / Disable (this session)** — runtime toggle only; never writes config.
   The footer's first line shows `[<lock> N write paths]` next to the cwd/branch
   while the sandbox is active, and `[<lock-open> Sandbox off]` when it is off
@@ -104,6 +104,54 @@ combined entries are used (an explicit empty array disables that built-in defaul
   }
 }
 ```
+
+### Dynamic system temporary directories
+
+Set the top-level `allowSystemTemp` option (default: `false`) to grant read/write
+access to dynamically discovered temporary directories, without hardcoding macOS's
+random-looking per-user path:
+
+```json
+{
+  "allowSystemTemp": true
+}
+```
+
+This adds the following to the effective read/write allowances for **both bash and
+file tools**, without writing generated paths into your config:
+
+- The running Pi process's temporary directory (`os.tmpdir()`, normally influenced
+  by `TMPDIR`).
+- `/tmp` on macOS and Linux.
+- On macOS, the current user's native temporary directory, discovered using
+  `/usr/bin/getconf DARWIN_USER_TEMP_DIR`. This is included even if `TMPDIR` points
+  elsewhere, since native applications such as Chrome may ignore that override.
+
+Paths are canonicalized (e.g. `/var/...` → `/private/var/...`) and deduplicated.
+Only the specific temp directories are granted, **not all of `/private/var/folders`**
+or the adjacent macOS cache directory. `denyWrite` still takes precedence. If
+macOS discovery fails or a candidate path is unsafe, it is skipped with a warning;
+the sandbox remains active with the other valid grants instead of guessing a
+broader directory.
+
+After editing config, use `/sandbox` → **Reload config from disk**. **Show status**
+lists the resolved system-temp allowances. To remove these implicit grants, set
+`allowSystemTemp` to `false` and reload; clearing `filesystem.allowWrite` alone does
+not remove them. Existing explicit allowances remain unchanged.
+
+**Security:** this permits reading, modifying, and deleting other files within the
+granted temp directories, including temporary files belonging to other applications
+where OS permissions permit it. The runtime-temp grant follows Pi's startup
+environment: if `TMPDIR` points at your home directory, that entire directory
+would be granted. Check your temp environment before enabling this option, and
+leave it disabled if a narrower allowance suffices.
+
+For browser automation, use `agent-browser` through a separately configured Pi
+MCP server rather than launching Chrome through sandboxed bash. Browser-process
+permission overrides are not supported by this extension. The MCP server runs
+outside the bash sandbox, so its browser's filesystem access is not governed by
+this extension. `allowSystemTemp` only grants temp-directory access to sandboxed
+tools; it does not grant browser IPC permissions or access to `~/Library`.
 
 ### Read vs write precedence
 

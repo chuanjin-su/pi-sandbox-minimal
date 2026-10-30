@@ -7,6 +7,7 @@ import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-a
 
 import type { SandboxConfig } from "./config.ts";
 import { canonicalizePath } from "./policy.ts";
+import { getSystemTempPaths } from "./system-temp.ts";
 
 export interface SessionAllowances {
 	readPaths: string[];
@@ -40,10 +41,12 @@ function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
 export function resolveAllowances(
 	config: SandboxConfig,
 	allowances?: SessionAllowances,
+	platform: NodeJS.Platform = process.platform,
 ): EffectiveAllowances {
 	const writePaths = unique([
 		...(config.filesystem?.allowWrite ?? []),
 		...(allowances?.writePaths ?? []),
+		...(config.allowSystemTemp === true ? getSystemTempPaths({ platform }) : []),
 	]);
 
 	return {
@@ -67,7 +70,7 @@ export function buildRuntimeConfig(
 	allowances?: SessionAllowances,
 	platform: NodeJS.Platform = process.platform,
 ): SandboxRuntimeConfig {
-	const effective = resolveAllowances(config, allowances);
+	const effective = resolveAllowances(config, allowances, platform);
 
 	return {
 		// Omitting network.allowedDomains disables all network restriction.
@@ -84,7 +87,6 @@ export function buildRuntimeConfig(
 		},
 		ignoreViolations: config.ignoreViolations,
 		enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
-		allowBrowserProcess: config.allowBrowserProcess,
 		allowPty: config.allowPty,
 	} as SandboxRuntimeConfig;
 }
