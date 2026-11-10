@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
+- Display sandbox status in a scrollable, dismissible TUI overlay with a selection
+  dialog fallback for other UI clients, without adding a session notification.
 - Prompt for `touch` write denials and relative shell redirections. Preserve bash
   diagnostic lines when reporting errors so permission grants and retries work.
-
 - Default filesystem allowlists to only the working directory (`.`), with empty
   read/write denylists. Remove implicit temp, home-config, and Library grants and
   sensitive-file write exclusions. Existing explicit configuration is unchanged.

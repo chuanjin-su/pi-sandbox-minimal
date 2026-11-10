@@ -14,6 +14,7 @@ import {
 import { canonicalizePath } from "./policy.ts";
 import type { SessionAllowances } from "./sandbox-runtime.ts";
 import { formatSandboxConfiguration, showPermissionPrompt } from "./ui.ts";
+import { showSandboxStatus } from "./status-view.ts";
 
 export type AllowKind = "read" | "write";
 
@@ -200,7 +201,8 @@ export async function runSandboxMenu(
 		if (action === undefined || action === "Exit") return;
 
 		if (action === "Show status") {
-			ctx.ui.notify(
+			await showSandboxStatus(
+				ctx,
 				formatSandboxConfiguration(
 					enabled,
 					controller.isInitialized(),
@@ -208,7 +210,6 @@ export async function runSandboxMenu(
 					getConfigPaths(ctx.cwd),
 					controller.getAllowances(),
 				),
-				"info",
 			);
 		} else if (action === "Disable (this session)") {
 			if (await controller.disable(ctx)) ctx.ui.notify("Sandbox disabled", "info");

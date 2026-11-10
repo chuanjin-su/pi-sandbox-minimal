@@ -1,6 +1,6 @@
 {
 	"name": "pi-sandbox-minimal",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "OS-level sandboxing for pi with interactive permission prompts: sandboxed bash plus read/write/edit/ls/grep/find interception, /sandbox menu",
 	"keywords": [
 		"pi-package",

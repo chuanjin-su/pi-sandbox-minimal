@@ -65,10 +65,15 @@ The `/sandbox` menu includes:
 
 | Action | Description |
 | --- | --- |
-| Show status | View sandbox state, configuration locations, permissions, and bash runtime access. |
+| Show status | Open a scrollable panel with sandbox state, configuration locations, permissions, and bash runtime access. |
 | Enable / Disable (this session) | Toggle protection without changing configuration files. |
 | Settings… | Add or remove read/write paths, edit configuration, and toggle sandboxing of `!` commands. |
 | Reload config from disk | Apply configuration changes to the running session. |
+
+In the status panel, use **↑/↓**, **Page Up / Page Down**, or **Home / End** to
+scroll. Press **Enter** or **Escape** to return to the menu. Selection shortcuts
+follow your pi keybindings. Status is shown in a temporary panel, not added to the
+session transcript.
 
 Commands entered with `!` or `!!` are also sandboxed unless `sandboxUserShell` is
 `false`.
