@@ -9,6 +9,7 @@ import {
 import { matchesPattern } from "./policy.ts";
 import type { SessionAllowances } from "./sandbox-runtime.ts";
 import { getSystemTempPaths } from "./system-temp.ts";
+import { BASH_RUNTIME_WRITE_PATHS, getBashRuntimeReadPaths } from "./strict-sandbox.ts";
 
 export type PermissionChoice = "abort" | "session" | "project" | "global";
 
@@ -363,6 +364,11 @@ export function formatSandboxConfiguration(
 		`  Allow Read:  ${config.filesystem?.allowRead?.join(", ") || "(none)"}`,
 		`  Allow Write: ${config.filesystem?.allowWrite?.join(", ") || "(none)"}`,
 		`  Deny Write:  ${config.filesystem?.denyWrite?.join(", ") || "(none)"}`,
+		`  Bash OS runtime read: ${getBashRuntimeReadPaths().join(", ")}`,
+		`  Bash process I/O: ${BASH_RUNTIME_WRITE_PATHS.join(", ")}`,
+		platform === "linux"
+			? "  Bash kernel FS: isolated /proc and minimal /dev; no host /sys"
+			: "  Bash traversal: directory/symlink metadata and root entry names",
 		...(config.allowSystemTemp === true
 			? [`  System temp read/write: ${getSystemTempPaths().join(", ")}`]
 			: []),
@@ -373,7 +379,9 @@ export function formatSandboxConfiguration(
 		"",
 		"Rules",
 		"  Filesystem-only sandboxing: bash network access is unrestricted.",
-		"  Reads are blocked unless the path is in allowRead or allowWrite.",
+		"  User-data reads are blocked unless the path is in allowRead or allowWrite.",
+		"  Bash additionally has the explicit OS runtime/device access shown above.",
+		"  No implicit bash temp/log grants or sensitive-file write denials.",
 		"  allowWrite also grants read access to the same path.",
 		"  denyRead is overridden when a permission prompt is granted for a path.",
 		"  denyWrite takes PRECEDENCE over allowWrite and is never prompted.",

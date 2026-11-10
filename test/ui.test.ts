@@ -15,6 +15,15 @@ describe("sandbox status", () => {
 		ok(!status.includes("System temp read/write:"));
 	});
 
+	it("separates configured user-data grants from bash OS runtime exceptions", () => {
+		const status = formatSandboxConfiguration(true, true, DEFAULT_CONFIG, paths, allowances);
+		ok(status.includes("Allow Read:  .\n"));
+		ok(status.includes("Allow Write: .\n"));
+		ok(status.includes("Bash OS runtime read:"));
+		ok(status.includes("Bash process I/O:"));
+		ok(status.includes("No implicit bash temp/log grants"));
+	});
+
 	it("shows the resolved read/write directories when enabled", () => {
 		const status = formatSandboxConfiguration(true, true,
 			{ ...DEFAULT_CONFIG, allowSystemTemp: true }, paths, allowances);

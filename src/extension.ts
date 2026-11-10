@@ -19,6 +19,7 @@ import {
 } from "./policy.ts";
 import {
 	createSandboxedBashOps,
+	extractBlockedReadPath,
 	extractBlockedWritePath,
 	initializeSandbox,
 	resolveAllowances,
@@ -47,12 +48,15 @@ export default function (pi: ExtensionAPI) {
 
 	let sandboxEnabled = false;
 	let sandboxInitialized = false;
+	let sandboxFailure: string | undefined;
 	const allowances: SessionAllowances = { readPaths: [], writePaths: [] };
 	let sessionWritePathCount = 0;
+	// Agent-writable project config must not be a route to self-grant access.
+	// Only startup and human /sandbox actions reload policy from disk.
+	let currentConfig = loadConfig(localCwd);
 
-	const effectiveReadPaths = (cwd: string) => resolveAllowances(loadConfig(cwd), allowances).readPaths;
-	const effectiveWritePaths = (cwd: string) =>
-		resolveAllowances(loadConfig(cwd), allowances).writePaths;
+	const effectiveReadPaths = (_cwd: string) => resolveAllowances(currentConfig, allowances).readPaths;
+	const effectiveWritePaths = (_cwd: string) => resolveAllowances(currentConfig, allowances).writePaths;
 
 	function updateStatus(): void {
 		// The footer shows the sandbox state inline on its first line (footer.ts);
@@ -61,12 +65,15 @@ export default function (pi: ExtensionAPI) {
 		requestFooterRender();
 	}
 
-	async function refreshSandbox(cwd: string): Promise<void> {
+	async function refreshSandbox(_cwd: string, config = currentConfig): Promise<void> {
 		if (!sandboxInitialized) return;
+		currentConfig = config; // A failed tightening must not revert to older grants.
 		try {
-			updateSandboxConfig(sandboxManager, loadConfig(cwd), allowances);
+			updateSandboxConfig(sandboxManager, config, allowances);
+			sandboxFailure = undefined;
 		} catch (error) {
-			console.error(`Warning: Failed to update sandbox configuration: ${error}`);
+			sandboxFailure = `Failed to update sandbox configuration: ${error}`;
+			console.error(sandboxFailure);
 		}
 	}
 
@@ -96,7 +103,7 @@ export default function (pi: ExtensionAPI) {
 		} else {
 			allowances.writePaths = allowances.writePaths.filter((entry) => entry !== value);
 		}
-		await refreshSandbox(cwd);
+		await refreshSandbox(cwd, loadConfig(cwd));
 		updateStatus();
 	}
 
@@ -107,9 +114,12 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const config = loadConfig(ctx.cwd);
+		currentConfig = config;
+		sandboxEnabled = true; // Requested protection must never fail open.
 		const platform = process.platform;
 		if (platform !== "darwin" && platform !== "linux") {
-			ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
+			sandboxFailure = `Sandbox not supported on ${platform}`;
+			ctx.ui.notify(sandboxFailure, "warning");
 			return false;
 		}
 
@@ -117,14 +127,13 @@ export default function (pi: ExtensionAPI) {
 			await initializeSandbox(sandboxManager, config, allowances);
 			sandboxEnabled = true;
 			sandboxInitialized = true;
+			sandboxFailure = undefined;
 			updateStatus();
 			return true;
 		} catch (error) {
-			sandboxEnabled = false;
-			ctx.ui.notify(
-				`Sandbox initialization failed: ${error instanceof Error ? error.message : error}`,
-				"error",
-			);
+			sandboxFailure = `Sandbox initialization failed: ${error instanceof Error ? error.message : error}`;
+			try { await sandboxManager.reset(); } catch { /* Best-effort cleanup. */ }
+			ctx.ui.notify(`${sandboxFailure}. Bash remains blocked.`, "error");
 			return false;
 		}
 	}
@@ -144,19 +153,23 @@ export default function (pi: ExtensionAPI) {
 		}
 		sandboxEnabled = false;
 		sandboxInitialized = false;
+		sandboxFailure = undefined;
 		updateStatus();
 		return true;
 	}
 
 	const controller: SandboxController = {
 		isEnabled: () => sandboxEnabled,
-		isInitialized: () => sandboxInitialized,
+		isInitialized: () => sandboxInitialized && !sandboxFailure,
 		getAllowances: () => allowances,
-		getConfig: () => loadConfig(localCwd),
+		getConfig: () => currentConfig,
 		enable: enableSandbox,
 		disable: disableSandbox,
 		async refresh(ctx) {
-			if (!sandboxEnabled) return;
+			if (!sandboxEnabled) {
+				currentConfig = loadConfig(ctx.cwd);
+				return;
+			}
 			if (!sandboxInitialized) {
 				// Enabled but never initialized (e.g. dependencies were missing at
 				// session_start): clear the flag so enableSandbox does a full init.
@@ -164,7 +177,7 @@ export default function (pi: ExtensionAPI) {
 				await enableSandbox(ctx);
 				return;
 			}
-			await refreshSandbox(ctx.cwd);
+			await refreshSandbox(ctx.cwd, loadConfig(ctx.cwd));
 			updateStatus();
 		},
 		applyChoice,
@@ -175,9 +188,11 @@ export default function (pi: ExtensionAPI) {
 		...localBash,
 		label: "bash (sandboxed)",
 		async execute(id, params, signal, onUpdate, ctx) {
+			if (sandboxEnabled) await refreshSandbox(ctx.cwd);
 			const runBash = () => {
-				if (!sandboxEnabled || !sandboxInitialized) {
-					return localBash.execute(id, params, signal, onUpdate, ctx);
+				if (!sandboxEnabled) return localBash.execute(id, params, signal, onUpdate, ctx);
+				if (!sandboxInitialized || sandboxFailure) {
+					throw new Error(`${sandboxFailure ?? "Sandbox is not initialized"}. Refusing unsandboxed bash execution.`);
 				}
 				return createBashToolDefinition(localCwd, {
 					operations: createSandboxedBashOps(sandboxManager, userShellPath),
@@ -189,14 +204,17 @@ export default function (pi: ExtensionAPI) {
 			try {
 				result = await runBash();
 			} catch (error) {
-				if (!(error instanceof Error) || !error.message.includes("Operation not permitted")) {
+				if (!(error instanceof Error) || !sandboxEnabled || !sandboxInitialized ||
+					(!error.message.includes("Operation not permitted") &&
+						!extractBlockedWritePath(error.message) && !extractBlockedReadPath(error.message))) {
 					throw error;
 				}
 				result = {
 					content: [
 						{
 							type: "text",
-							text: `Error: Command failed with OS-level sandbox restriction: ${error.message}`,
+							// Keep diagnostic line starts intact for permission detection.
+							text: `Error: Command failed; filesystem access may be blocked.\n${error.message}`,
 						},
 					],
 					details: {},
@@ -208,11 +226,23 @@ export default function (pi: ExtensionAPI) {
 					.filter((content: any) => content.type === "text")
 					.map((content: any) => content.text)
 					.join("\n");
+				const blockedReadPath = extractBlockedReadPath(output);
+				if (blockedReadPath) {
+					const path = canonicalizePath(blockedReadPath);
+					if (!matchesPattern(path, effectiveReadPaths(ctx.cwd))) {
+						const config = currentConfig;
+						const choice = await promptReadBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
+						if (choice.action !== "abort") {
+							await applyChoice(choice.action, "read", choice.value, ctx.cwd);
+							return runBash();
+						}
+					}
+				}
 				const blockedPath = extractBlockedWritePath(output);
 
 				if (blockedPath) {
 					const path = canonicalizePath(blockedPath);
-					const config = loadConfig(ctx.cwd);
+					const config = currentConfig;
 					const writePermission = await resolveWritePermission({
 						path,
 						allowWrite: effectiveWritePaths(ctx.cwd),
@@ -246,8 +276,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("user_bash", async (event, ctx) => {
-		if (!sandboxEnabled || !sandboxInitialized) return;
-		if (loadConfig(ctx.cwd).sandboxUserShell === false) return;
+		if (!sandboxEnabled) return;
+		if (currentConfig.sandboxUserShell === false) return;
+		await refreshSandbox(ctx.cwd);
+		if (!sandboxInitialized || sandboxFailure) {
+			throw new Error(`${sandboxFailure ?? "Sandbox is not initialized"}. Refusing unsandboxed shell execution.`);
+		}
 		return {
 			operations: createSandboxedBashOps(sandboxManager, userShellPath),
 		};
@@ -255,8 +289,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!sandboxEnabled) return;
-		const config = loadConfig(ctx.cwd);
-		if (!config.enabled) return;
+		const config = currentConfig;
+		if (config.filesystem?.disabled === true) return;
 		const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
 		// Read-family tools: read, ls, grep, find (path defaults to the project).
@@ -316,6 +350,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		currentConfig = loadConfig(ctx.cwd);
 		// Custom footer with the sandbox state inline on the first line. Re-registered
 		// per session_start so ctx stays fresh across session switches/reloads.
 		installSandboxFooter(pi, ctx, () => ({ enabled: sandboxEnabled, writePathCount: sessionWritePathCount }));
@@ -325,7 +360,7 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
 			return;
 		}
-		if (!loadConfig(ctx.cwd).enabled) {
+		if (!currentConfig.enabled) {
 			sandboxEnabled = false;
 			ctx.ui.notify("Sandbox disabled via config", "info");
 			return;

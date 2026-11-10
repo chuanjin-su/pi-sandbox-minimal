@@ -5,9 +5,9 @@ import type { SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /**
- * Extension configuration. Filesystem-only sandboxing: the network section of
- * the runtime config is intentionally left without allowedDomains so the
- * runtime applies no network restrictions to sandboxed bash commands.
+ * Extension configuration. Filesystem-only sandboxing: the lifecycle manager
+ * receives no network allowlist/proxies, and the strict bash adapter deliberately
+ * leaves network access unrestricted.
  * Browser-process permissions are intentionally unsupported; browser automation
  * should run through a separately configured MCP server.
  */
@@ -33,10 +33,10 @@ export const DEFAULT_CONFIG: SandboxConfig = {
 	sandboxUserShell: true,
 	permissionPromptTimeoutSeconds: DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS,
 	filesystem: {
-		denyRead: ["/Users", "/home"],
-		allowRead: [".", "~/.config", "~/.local", "Library"],
-		allowWrite: [".", "/tmp"],
-		denyWrite: [".env", ".env.*", "*.pem", "*.key"],
+		denyRead: [],
+		allowRead: ["."],
+		allowWrite: ["."],
+		denyWrite: [],
 	},
 };
 

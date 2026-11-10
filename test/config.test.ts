@@ -63,8 +63,11 @@ describe("mergeConfigLayers", () => {
 	});
 
 	it("explicit empty array disables built-in defaults", () => {
-		const merged = mergeConfigLayers(DEFAULT_CONFIG, {}, { filesystem: { denyWrite: [] } });
-		deepStrictEqual(merged.filesystem?.denyWrite, []);
+		const merged = mergeConfigLayers(DEFAULT_CONFIG, {}, {
+			filesystem: { allowRead: [], allowWrite: [] },
+		});
+		deepStrictEqual(merged.filesystem?.allowRead, []);
+		deepStrictEqual(merged.filesystem?.allowWrite, []);
 	});
 
 	it("unconfigured arrays keep their defaults", () => {
@@ -77,8 +80,13 @@ describe("loadConfig / getConfigPaths", () => {
 	it("returns defaults when no config files exist", () => {
 		const config = loadConfig(tempProject());
 		strictEqual(config.enabled, true);
-		ok(config.filesystem?.allowWrite?.includes("."));
-		ok(config.filesystem?.allowWrite?.includes("/tmp"));
+		deepStrictEqual(config.filesystem, {
+			denyRead: [],
+			allowRead: ["."],
+			allowWrite: ["."],
+			denyWrite: [],
+		});
+		strictEqual(config.allowSystemTemp, false);
 	});
 
 	it("reads project config from .pi/sandbox.json", () => {

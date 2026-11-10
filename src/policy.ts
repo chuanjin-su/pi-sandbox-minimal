@@ -2,12 +2,19 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 
-function expandPath(filePath: string): string {
+export function expandFilesystemPattern(filePath: string): string {
 	return resolve(filePath.replace(/^~(?=$|\/)/, homedir()));
 }
 
+/** Shared wildcard compiler for file-tool checks and the macOS OS policy. */
+export function filesystemPatternRegex(pattern: string): RegExp {
+	const escaped = expandFilesystemPattern(pattern)
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+	return new RegExp(`^${escaped}$`);
+}
+
 export function canonicalizePath(filePath: string): string {
-	const absolutePath = expandPath(filePath);
+	const absolutePath = expandFilesystemPattern(filePath);
 	try {
 		return realpathSync.native(absolutePath);
 	} catch {
@@ -30,11 +37,8 @@ export function canonicalizePath(filePath: string): string {
 export function matchesPattern(filePath: string, patterns: string[]): boolean {
 	const absolutePath = canonicalizePath(filePath);
 	return patterns.some((pattern) => {
-		const absolutePattern = pattern.includes("*") ? expandPath(pattern) : canonicalizePath(pattern);
-		if (pattern.includes("*")) {
-			const escaped = absolutePattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-			return new RegExp(`^${escaped}$`).test(absolutePath);
-		}
+		if (pattern.includes("*")) return filesystemPatternRegex(pattern).test(absolutePath);
+		const absolutePattern = canonicalizePath(pattern);
 		const separator = absolutePattern.endsWith("/") ? "" : "/";
 		return absolutePath === absolutePattern || absolutePath.startsWith(absolutePattern + separator);
 	});

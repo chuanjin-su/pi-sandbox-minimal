@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -8,6 +7,7 @@ import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-a
 import type { SandboxConfig } from "./config.ts";
 import { canonicalizePath } from "./policy.ts";
 import { getSystemTempPaths } from "./system-temp.ts";
+import { buildStrictSandboxSpawn, getBashRuntimeReadPaths } from "./strict-sandbox.ts";
 
 export interface SessionAllowances {
 	readPaths: string[];
@@ -23,20 +23,17 @@ function unique(values: string[]): string[] {
 	return [...new Set(values)];
 }
 
-const canonicalizeFilesystemPattern = (path: string) =>
-	path.includes("*") ? path : canonicalizePath(path);
+const canonicalizeFilesystemPattern = (path: string) => {
+	if (path.includes("*")) return path;
+	const canonical = canonicalizePath(path);
+	if (canonical.includes("*")) {
+		throw new Error(`A literal path containing '*' cannot be safely compiled as a sandbox rule: ${path}`);
+	}
+	return canonical;
+};
 
 const canonicalizeFilesystemPatterns = (paths: string[]) =>
 	unique(paths.map(canonicalizeFilesystemPattern));
-
-function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
-	if (platform !== "linux") return [];
-
-	// apply-seccomp executes inside the Bubblewrap namespace, so broad rules
-	// such as denyRead: ["/home"] must not hide the runtime's bundled helper.
-	const runtimeEntryUrl = import.meta.resolve("@carderne/sandbox-runtime");
-	return [fileURLToPath(new URL("../vendor/seccomp", runtimeEntryUrl))];
-}
 
 export function resolveAllowances(
 	config: SandboxConfig,
@@ -60,10 +57,10 @@ export function resolveAllowances(
 }
 
 /**
- * Filesystem-only runtime config. The network object intentionally omits
- * `allowedDomains`: the runtime then applies no network restrictions to
- * sandboxed commands ((allow network*) on macOS, no proxy routing on Linux)
- * while filesystem rules remain fully enforced.
+ * Compile the shared user-data allowances plus explicit bash OS dependencies.
+ * Omitting network.allowedDomains prevents the lifecycle manager from starting
+ * proxies. The owned strict adapter (not runtime.wrapWithSandbox) enforces the
+ * filesystem policy and deliberately leaves network access unrestricted.
  */
 export function buildRuntimeConfig(
 	config: SandboxConfig,
@@ -77,10 +74,12 @@ export function buildRuntimeConfig(
 		network: {},
 		filesystem: {
 			disabled: config.filesystem?.disabled,
-			denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? []),
+			// Explicit read allowances override denyRead, just as for file tools.
+			// The adapter always enforces an allowlist, even with no public denies.
+			denyRead: ["/"],
 			allowRead: canonicalizeFilesystemPatterns([
 				...effective.readPaths,
-				...sandboxRuntimeReadPaths(platform),
+				...getBashRuntimeReadPaths(platform),
 			]),
 			allowWrite: canonicalizeFilesystemPatterns(effective.writePaths),
 			denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
@@ -88,6 +87,7 @@ export function buildRuntimeConfig(
 		ignoreViolations: config.ignoreViolations,
 		enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
 		allowPty: config.allowPty,
+		bwrapPath: config.bwrapPath,
 	} as SandboxRuntimeConfig;
 }
 
@@ -97,6 +97,8 @@ export async function initializeSandbox(
 	allowances?: SessionAllowances,
 ): Promise<void> {
 	const runtimeConfig = buildRuntimeConfig(config, allowances);
+	// Validate before activation, not after a command has already started.
+	buildStrictSandboxSpawn(runtimeConfig, ":", getShellConfig().shell, process.cwd());
 	await manager.initialize(runtimeConfig);
 }
 
@@ -106,15 +108,38 @@ export function updateSandboxConfig(
 	allowances: SessionAllowances,
 ): void {
 	// Permission updates must not tear down infrastructure used by concurrent
-	// commands. New commands pick up filesystem rules when wrapped.
-	manager.updateConfig(buildRuntimeConfig(config, allowances));
+	// commands. New commands snapshot filesystem rules when spawned.
+	const runtimeConfig = buildRuntimeConfig(config, allowances);
+	buildStrictSandboxSpawn(runtimeConfig, ":", getShellConfig().shell, process.cwd());
+	manager.updateConfig(runtimeConfig);
+}
+
+function unquoteDiagnosticPath(path: string): string {
+	return /^(['"]).*\1$/.test(path) ? path.slice(1, -1) : path;
 }
 
 export function extractBlockedWritePath(output: string): string | null {
-	const match = output.match(
-		/(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
+	// Shell redirections report the path as written, including relative paths.
+	const shellMatch = output.match(
+		/^(?:\/[^\n:]*\/)?(?:bash|sh): (?:line \d+: )?(.+?): (?:Operation not permitted|Permission denied|Read-only file system)$/m,
 	);
-	return match ? match[1]! : null;
+	if (shellMatch) return unquoteDiagnosticPath(shellMatch[1]!);
+
+	// BSD touch: "touch: ../file: Operation not permitted"
+	// GNU touch: "touch: cannot touch '../file': Permission denied"
+	const touchMatch = output.match(
+		/^(?:\/[^\n:]*\/)?touch: (?:cannot touch |setting times of )?(.+?): (?:Operation not permitted|Permission denied|Read-only file system|No such file or directory)$/m,
+	);
+	return touchMatch ? unquoteDiagnosticPath(touchMatch[1]!) : null;
+}
+
+/** Only recognized read-command diagnostics; never infer permission from code. */
+export function extractBlockedReadPath(output: string): string | null {
+	const match = output.match(
+		/^(?:\/[^\n:]*\/)?(?:cat|head|tail|ls|grep|find|wc|stat|less|sed): (.+?): (?:Operation not permitted|Permission denied|No such file or directory)$/m,
+	);
+	if (!match) return null;
+	return unquoteDiagnosticPath(match[1]!);
 }
 
 const EXIT_STDIO_GRACE_MS = 100;
@@ -217,10 +242,13 @@ export function createSandboxedBashOps(
 		async exec(command, cwd, { onData, signal, timeout, env }) {
 			if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
 
-			const { shell, args } = getShellConfig(shellPath);
-			const wrappedCommand = await manager.wrapWithSandbox(command, shell);
+			if (signal?.aborted) throw new Error("aborted");
+			const { shell } = getShellConfig(shellPath);
+			const launch = buildStrictSandboxSpawn(manager.getConfig(), command, shell, cwd);
 
-			const child = spawn(shell, [...args, wrappedCommand], {
+			// Spawn the sandbox directly. Never evaluate the command (or BASH_ENV)
+			// in an unsandboxed outer shell.
+			const child = spawn(launch.file, launch.args, {
 				cwd,
 				env,
 				detached: true,
@@ -258,7 +286,6 @@ export function createSandboxedBashOps(
 			} finally {
 				if (timeoutHandle) clearTimeout(timeoutHandle);
 				signal?.removeEventListener("abort", killProcessGroup);
-				manager.cleanupAfterCommand();
 			}
 		},
 	};
